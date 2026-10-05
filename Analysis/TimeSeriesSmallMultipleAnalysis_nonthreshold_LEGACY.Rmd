@@ -1,0 +1,1561 @@
+---
+title: "Time Series Small Multiple Analysis"
+author: "Anon"
+date: "2024-08-08"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# NOTE
+
+Identification has been renamed to "Find" tasks
+Estimation has been renamed to "Lookup" tasks
+
+## Data Cleaning
+
+```{r libraryImportEtc}
+library(plyr)
+library(tidyverse)
+library(readxl)
+library(purrr)
+library(ggpubr)
+
+```
+
+```{r initialReadIn}
+data <- read_csv("NonThresholdData.csv")
+
+answerKey <- read_xlsx("AnswerKeyNonThreshold.xlsx")
+
+data.clean <- data %>% 
+  filter(Finished == "True") %>% 
+  filter(StartDate >= ymd("2024-09-15")) %>% 
+  select(-contains("Click"))
+
+data.clean %>% dplyr::count(IdentCurVal)
+data.clean %>% dplyr::count(`Ident Trend`)
+data.clean %>% dplyr::count(`Ident Cur Val L`)
+data.clean %>% dplyr::count(`Ident Trend L`)
+data.clean %>% dplyr::count(`Est Cur Val`)
+data.clean %>% dplyr::count(`Est Trend`)
+```
+
+```{r dataCleaning}
+answerKey.lists <- answerKey %>% 
+  mutate(`7`=list(reticulate::py_eval(`7`)),
+         `8`=list(reticulate::py_eval(`8`)),
+         `9`=list(reticulate::py_eval(`9`)),
+         `10`=list(reticulate::py_eval(`10`)),
+         `11`=list(reticulate::py_eval(`11`)),
+         `12`=list(reticulate::py_eval(`12`)),
+         `31`=list(reticulate::py_eval(`31`)),
+         `32`=list(reticulate::py_eval(`32`)),
+         `33`=list(reticulate::py_eval(`33`)),
+         `34`=list(reticulate::py_eval(`34`)),
+         `35`=list(reticulate::py_eval(`35`)),
+         `36`=list(reticulate::py_eval(`36`)))
+
+data.clean.answerscoded.raw <- data.clean %>% 
+  pivot_longer(cols = c(`ControlIdeCurVal1_Page Submit`:SepPosEstTrend23), 
+               names_to = c("question"), 
+               values_to = "value") %>% 
+  filter(!is.na(value)) %>% 
+  mutate(type = if_else(str_detect(question, "_Page Submit"), "time", "Answer"),
+         graph = if_else(str_detect(question, "Control"), "Control",
+                         if_else(str_detect(question, "Emphasis"), "Emphasis",
+                         if_else(str_detect(question, "IntSize"), "IntSize",
+                         if_else(str_detect(question, "IntPos"), "IntPos",
+                         if_else(str_detect(question, "SepSize"), "SepSize",
+                         if_else(str_detect(question, "SepPos"), "SepPos",
+                         if_else(str_detect(question, "Attention"), "AttentionCheck", NA))))))),
+         qtype = if_else((str_detect(question, "IdeCurVal") | 
+                          str_detect(question, "IdentCurVal")) & !str_detect(question, "L"), "IdentCurVal",
+                         if_else(str_detect(question, "IdeCurValL"), "IdentCurValL",
+                         if_else(str_detect(question, "IdeTrend") & !str_detect(question, "L"), "IdentTrend",
+                         if_else(str_detect(question, "IdeTrendL"), "IdentTrendL",
+                         if_else(str_detect(question, "EstCurVal"), "EstCurVal",
+                         if_else(str_detect(question, "EstTrend"), "EstTrend",
+                         if_else(str_detect(question, "Attention"), "AttentionCheck", NA))))))),
+         dist = str_extract(question, "[0-9]+")) %>% 
+  select(-question) %>% 
+  pivot_wider(values_from = value, names_from = type) %>% 
+  dplyr::rename(question = qtype) %>% 
+  mutate(dist = if_else(is.na(dist),"A", dist)) %>% 
+  pivot_wider(values_from = Answer, names_from = dist) %>% 
+  rowwise() %>%
+  #Make lists out of string
+  mutate(`7`= list(as.list(as.numeric(unlist(str_extract_all(`7`, "[0-9]+"))))),
+         `8`= list(as.list(as.numeric(unlist(str_extract_all(`8`, "[0-9]+"))))),
+         `9`= list(as.list(as.numeric(unlist(str_extract_all(`9`, "[0-9]+"))))),
+         `10`= list(as.list(as.numeric(unlist(str_extract_all(`10`, "[0-9]+"))))),
+         `11`= list(as.list(as.numeric(unlist(str_extract_all(`11`, "[0-9]+"))))),
+         `12`= list(as.list(as.numeric(unlist(str_extract_all(`12`, "[0-9]+"))))),
+         `31`= list(as.list(as.numeric(unlist(str_extract_all(`31`, "[0-9]+"))))),
+         `32`= list(as.list(as.numeric(unlist(str_extract_all(`32`, "[0-9]+"))))),
+         `33`= list(as.list(as.numeric(unlist(str_extract_all(`33`, "[0-9]+"))))),
+         `34`= list(as.list(as.numeric(unlist(str_extract_all(`34`, "[0-9]+"))))),
+         `35`= list(as.list(as.numeric(unlist(str_extract_all(`35`, "[0-9]+"))))),
+         `36`= list(as.list(as.numeric(unlist(str_extract_all(`36`, "[0-9]+")))))) %>% 
+  ungroup() %>% 
+  #Check multiple selection
+  mutate(ans7 = imap(`7`, ~.x %in% answerKey.lists$`7`[[1]]),
+         ans7 = map_dbl(ans7, ~ sum(.x, na.rm = TRUE)),
+         ans8 = imap(`8`, ~.x %in% answerKey.lists$`8`[[1]]), 
+         ans8 = map_dbl(ans8, ~ sum(.x, na.rm = TRUE)),
+         ans9 = imap(`9`, ~.x %in% answerKey.lists$`9`[[1]]), 
+         ans9 = map_dbl(ans9, ~ sum(.x, na.rm = TRUE)),
+         ans10 = imap(`10`, ~.x %in% answerKey.lists$`10`[[1]]), 
+         ans10 = map_dbl(ans10, ~ sum(.x, na.rm = TRUE)),
+         ans11 = imap(`11`, ~.x %in% answerKey.lists$`11`[[1]]), 
+         ans11 = map_dbl(ans11, ~ sum(.x, na.rm = TRUE)),
+         ans12 = imap(`12`, ~.x %in% answerKey.lists$`12`[[1]]), 
+         ans12 = map_dbl(ans12, ~ sum(.x, na.rm = TRUE)),
+         ans31 = imap(`31`, ~.x %in% answerKey.lists$`31`[[1]]), 
+         ans31 = map_dbl(ans31, ~ sum(.x, na.rm = TRUE)),
+         ans32 = imap(`32`, ~.x %in% answerKey.lists$`32`[[1]]), 
+         ans32 = map_dbl(ans32, ~ sum(.x, na.rm = TRUE)),
+         ans33 = imap(`33`, ~.x %in% answerKey.lists$`33`[[1]]), 
+         ans33 = map_dbl(ans33, ~ sum(.x, na.rm = TRUE)),
+         ans34 = imap(`34`, ~.x %in% answerKey.lists$`34`[[1]]), 
+         ans34 = map_dbl(ans34, ~ sum(.x, na.rm = TRUE)),
+         ans35 = imap(`35`, ~.x %in% answerKey.lists$`35`[[1]]), 
+         ans35 = map_dbl(ans35, ~ sum(.x, na.rm = TRUE)),
+         ans36 = imap(`36`, ~.x %in% answerKey.lists$`36`[[1]]), 
+         ans36 = map_dbl(ans36, ~ sum(.x, na.rm = TRUE))) %>%
+  rowwise() %>% 
+  mutate(ans7 = if_else(sum(anyNA(`7`)) >= 1, NA, ans7),
+         ans8 = if_else(sum(anyNA(`8`)) >= 1, NA, ans8),
+         ans9 = if_else(sum(anyNA(`9`)) >= 1, NA, ans9),
+         ans10 = if_else(sum(anyNA(`10`)) >= 1, NA, ans10),
+         ans11 = if_else(sum(anyNA(`11`)) >= 1, NA, ans11),
+         ans12 = if_else(sum(anyNA(`12`)) >= 1, NA, ans12),
+         ans31 = if_else(sum(anyNA(`31`)) >= 1, NA, ans31),
+         ans32 = if_else(sum(anyNA(`32`)) >= 1, NA, ans32),
+         ans33 = if_else(sum(anyNA(`33`)) >= 1, NA, ans33),
+         ans34 = if_else(sum(anyNA(`34`)) >= 1, NA, ans34),
+         ans35 = if_else(sum(anyNA(`35`)) >= 1, NA, ans35),
+         ans36 = if_else(sum(anyNA(`36`)) >= 1, NA, ans36)) %>% 
+  ungroup() %>% 
+  #Check answers for the non-list options
+  mutate(across(c(55, 56, 57, 58, 59, 60, 67, 68, 69, 70, 71, 72, 73, 80, 81, 
+                  82, 83, 84, 85, 86, 87, 88, 89, 90, 91),
+                .fn = ~ .x == answerKey.lists[,cur_column()][[1]],
+                .names = "ans{.col}")) %>% 
+  #Transform to all right or not (T/F)
+  mutate(across(c(92:103),
+                .fn = ~ .x == 3)) %>% 
+  dplyr::rename("IntSize Ratings" = Q51,
+         "IntPos Ratings" = Q53,
+         "SepSize Ratings" = Q52,
+         "SepPos Ratings" = Q50,
+         "QualitativeResponseWhy" = Q177) %>% 
+  pivot_longer(cols = c(92:128), 
+               names_to = c("dist_ans"), 
+               values_to = "ans_TF", values_drop_na = T) %>% 
+  rowwise() %>% 
+  mutate(`7` = toString(`7`),
+         `7` = if_else(`7` == "NA", NA, `7`),
+         `8` = toString(`8`),
+         `8` = if_else(`8` == "NA", NA, `8`),
+         `9` = toString(`9`),
+         `9` = if_else(`9` == "NA", NA, `9`),
+         `10` = toString(`10`),
+         `10` = if_else(`10` == "NA", NA, `10`),
+         `11` = toString(`11`),
+         `11` = if_else(`11` == "NA", NA, `11`),
+         `12` = toString(`12`),
+         `12` = if_else(`12` == "NA", NA, `12`),
+         `31` = toString(`31`),
+         `31` = if_else(`31` == "NA", NA, `31`),
+         `32` = toString(`32`),
+         `32` = if_else(`32` == "NA", NA, `32`),
+         `33` = toString(`33`),
+         `33` = if_else(`33` == "NA", NA, `33`),
+         `34` = toString(`34`),
+         `34` = if_else(`34` == "NA", NA, `34`),
+         `35` = toString(`35`),
+         `35` = if_else(`35` == "NA", NA, `35`),
+         `36` = toString(`36`),
+         `36` = if_else(`36` == "NA", NA, `36`)) %>% 
+  ungroup() %>% 
+  pivot_longer(cols = c(55:91), 
+               names_to = c("dist"), 
+               values_to = "actualAns", values_drop_na = T) %>% 
+  select(-dist_ans) %>% 
+  select(StartDate:`Est Trend`, graph, question, dist, time, actualAns, ans_TF) %>% 
+  mutate(time = as.numeric(time),
+         ans = if_else(ans_TF == T, 1, 0))
+```
+
+```{r checkErrors}
+data.clean.answerscoded.numCorrect <- data.clean.answerscoded.raw %>% 
+  filter(dist != "A") %>% 
+  group_by(ResponseId) %>% 
+  mutate(NumCorrect = sum(ans_TF)) %>% 
+  distinct(ResponseId, NumCorrect)
+
+mean(data.clean.answerscoded.numCorrect$NumCorrect)
+sd(data.clean.answerscoded.numCorrect$NumCorrect)
+
+#Check for anyone outside of 2 standard deviations from the mean of number correct
+cutoff <- mean(data.clean.answerscoded.numCorrect$NumCorrect) -
+  2*sd(data.clean.answerscoded.numCorrect$NumCorrect)
+
+data.clean.answerscoded.numCorrect$NumCorrect > cutoff
+
+data.clean.answerscoded.numCorrect.remove <- data.clean.answerscoded.numCorrect %>% 
+  filter(NumCorrect < cutoff) %>% pull(ResponseId)
+
+data.clean.answerscoded.AC <- data.clean.answerscoded.raw %>% 
+  filter(dist == "A") %>% 
+  filter(actualAns == 16 | actualAns == 1) %>% 
+  pull(ResponseId)
+
+median(as.numeric(data.clean$`Duration (in seconds)`))/60
+```
+
+``` {r Demographics}
+data.clean %>% dplyr::count(Age)
+data.clean %>% dplyr::count(Gender)
+data.clean %>% dplyr::count(Race)
+data.clean %>% dplyr::count(`Hispanic/Latino`)
+data.clean %>% dplyr::count(Q179)
+```
+
+```{r RemoveErrorCase}
+data.clean.answerscoded <- data.clean.answerscoded.raw %>% 
+  filter(!(ResponseId %in% data.clean.answerscoded.numCorrect.remove)) %>% 
+  filter(ResponseId %in% data.clean.answerscoded.AC)
+
+data.clean.answerscoded %>% dplyr::count(graph)
+```
+
+```{r SetupTaskDatasets}
+data.identCurVal <- data.clean.answerscoded %>% 
+  filter(question == "IdentCurVal") %>% 
+  mutate(dist = as.numeric(dist))
+
+data.identTrend <- data.clean.answerscoded %>% 
+  filter(question == "IdentTrend") %>% 
+  mutate(dist = as.numeric(dist))
+
+data.estCurVal <- data.clean.answerscoded %>% 
+  filter(question == "EstCurVal") %>% 
+  mutate(dist = as.numeric(dist))
+
+data.estTrend <-  data.clean.answerscoded %>% 
+  filter(question == "EstTrend") %>% 
+  mutate(dist = as.numeric(dist))
+
+data.identCurValL <- data.clean.answerscoded %>% 
+  filter(question == "IdentCurValL") %>% 
+  mutate(dist = as.numeric(dist))
+
+data.identTrendL <- data.clean.answerscoded %>% 
+  filter(question == "IdentTrendL") %>% 
+  mutate(dist = as.numeric(dist))
+```
+
+## IDENTIFICATION CURRENT VALUE
+
+Question Wording: Which machine has the highest output right now?
+
+```{r Outlier Check}
+data.identCurVal.idOutliers <- data.identCurVal %>% 
+  mutate(IQR = IQR(time),
+         upper = quantile(time, probs=c( .75), na.rm = FALSE)+1.5*IQR,
+         lower = quantile(time, probs=c( .25), na.rm = FALSE)-1.5*IQR,
+         outlier = if_else((time > upper | time < lower), 1, 0)) %>% 
+  ungroup()
+
+data.identCurVal.idOutliers %>% count(outlier)
+
+data.identCurVal.rmOutliers <- data.identCurVal.idOutliers %>% 
+  filter(outlier == 0) %>% 
+  mutate(logTime = log(time))
+```
+
+
+```{r IdentCurValBoxplot}
+ggboxplot(data.identCurVal.idOutliers, x = "graph", y = "time", add = "point", color = "outlier",
+                 title = "Identification Current Value")
+ggpar(ggboxplot(data.identCurVal.idOutliers, x = "dist", y = "time", add = "point", color = "outlier",
+                 title = "Identification Current Value"))
+
+ggpar(ggboxplot(data.identCurVal.rmOutliers, x = "graph", y = "time", add = "point", 
+                 title = "Identification Current Value"), ylim = c(0,20))
+ggpar(ggboxplot(data.identCurVal.rmOutliers, x = "dist", y = "time", add = "point", 
+                 title = "Identification Current Value"), ylim = c(0,20))
+```
+
+```{r DensityPlots - Ident Current Value}
+ggplot(data = data.identCurVal.rmOutliers) + 
+  geom_density(aes(time, fill = graph), alpha = 0.5) + 
+  theme_minimal() + 
+  ggtitle("Identification Current Value")
+
+ggplot(data = data.identCurVal.rmOutliers) + 
+  geom_density(aes(logTime, fill = graph), alpha = 0.5) + 
+  theme_minimal() + 
+  ggtitle("Identification Current Value")
+```
+
+```{r CIs}
+source("ConfidenceIntervalHelperFunctions.R")
+
+data.identCurVal.means <- summarySEwithin(data = data.identCurVal.rmOutliers, measurevar = "time", 
+                                       withinvars = "graph", idvar = "ResponseId") %>% 
+  mutate(graph = factor(graph, levels = c("Control", "Emphasis", "IntSize",
+                                          "IntPos", "SepSize", "SepPos"), ordered = T))
+
+ggplot(data.identCurVal.means, aes(x=graph, y=time, group=1)) +
+  geom_errorbar(width=.1, aes(ymin=time-ci, ymax=time+ci)) +
+  geom_point(shape=21, size=3, fill="white") + 
+  ylim(0,15) +
+  theme_minimal() + 
+  ggtitle("Identification Current Value - Mean & CI")
+```
+
+```{r IdentCurValAssumptions}
+data.identCurVal.rmOutliers %>%
+  group_by(graph) %>%
+  rstatix::shapiro_test(time)
+
+data.identCurVal.rmOutliers %>%
+  group_by(graph) %>%
+  rstatix::shapiro_test(logTime)
+
+ggplot(data.identCurVal.rmOutliers) + 
+  geom_histogram(aes(x = logTime))
+
+ggplot(data.identCurVal.rmOutliers %>% filter(graph == "sepPos")) + 
+  geom_histogram(aes(x = time))
+
+ggqqplot(data.identCurVal.rmOutliers, "time", facet.by = "graph")
+ggqqplot(data.identCurVal.rmOutliers, "logTime", facet.by = "graph")
+```
+
+```{r IdentCurValStatTests}
+anova.identCurVal <- rstatix::anova_test(data = data.identCurVal.rmOutliers,
+                                         logTime ~ graph, dv = logTime, wid = ResponseId, within = graph)
+rstatix::get_anova_table(anova.identCurVal)
+
+model.identCurVal <- lme4::lmer(logTime ~ graph + (1|ResponseId),
+                                data = data.identCurVal.rmOutliers)
+summary(model.identCurVal)
+
+model.identCurVal.null <- lme4::lmer(logTime ~ (1|ResponseId), data = data.identCurVal.rmOutliers,
+                                     REML=FALSE)
+model.identCurVal.test <- lme4::lmer(logTime ~ graph + (1|ResponseId), data.identCurVal.rmOutliers,
+                                     REML=FALSE)
+anova(model.identCurVal.null, model.identCurVal.test, test.statistic="F")
+
+ggqqplot(resid(model.identCurVal))
+hist(resid(model.identCurVal))
+
+#plot(model.identCurVal)
+
+shapiro.test(resid(model.identCurVal))
+shapiro.test(resid(model.identCurVal.test))
+
+# coef(model.identCurVal.test)
+
+summary(multcomp::glht(model.identCurVal, linfct=multcomp::mcp(graph="Tukey")))
+```
+
+
+## IDENTIFICATION TREND
+
+Question Wording: Find 3 plots that have an overall output increasing over time. There may be more, but please select only 3.
+
+```{r Outlier Check}
+data.identTrend.idOutliers <- data.identTrend %>% 
+  mutate(IQR = IQR(time),
+         upper = quantile(time, probs=c( .75), na.rm = FALSE)+1.5*IQR,
+         lower = quantile(time, probs=c( .25), na.rm = FALSE)-1.5*IQR,
+         outlier = if_else((time > upper | time < lower), 1, 0)) %>% 
+  ungroup()
+
+data.identTrend.idOutliers %>% count(outlier)
+
+data.identTrend.rmOutliers <- data.identTrend.idOutliers %>% 
+  filter(outlier == 0) %>% 
+  mutate(logTime = log(time))
+```
+
+```{r IdentTrendBoxplot}
+ggboxplot(data.identTrend.idOutliers, x = "graph", y = "time", add = "point", color = "outlier",
+                 title = "Identification Trend")
+ggpar(ggboxplot(data.identTrend.idOutliers, x = "dist", y = "time", add = "point", color = "outlier",
+                 title = "Identification Trend"))
+
+ggpar(ggboxplot(data.identTrend.rmOutliers, x = "graph", y = "time", add = "point", 
+                 title = "Identification Trend"), ylim = c(0,30))
+
+check <- ggpar(ggboxplot(data.identTrend.rmOutliers, x = "graph", y = "time", add = "point", 
+                 title = "Identification Trend"), ylim = c(0,30))
+facet(check, facet.by = "dist")
+ggpar(ggboxplot(data.identTrend.rmOutliers, x = "dist", y = "time", add = "point", 
+                 title = "Identification Trend"), ylim = c(0,30))
+```
+
+```{r CIs}
+data.identTrend.means <- summarySEwithin(data = data.identTrend.rmOutliers, measurevar = "time", 
+                                       withinvars = "graph", idvar = "ResponseId") %>% 
+  mutate(graph = factor(graph, levels = c("Control", "Emphasis", "IntSize",
+                                          "IntPos", "SepSize", "SepPos"), ordered = T))
+
+ggplot(data.identTrend.means, aes(x=graph, y=time, group=1)) +
+  geom_errorbar(width=.1, aes(ymin=time-ci, ymax=time+ci)) +
+  geom_point(shape=21, size=3, fill="white") + 
+  ylim(0,21) +
+  theme_minimal() + 
+  ggtitle("Identification Trend - Mean & CI")
+```
+
+```{r DensityPlots - Ident Trend}
+ggplot(data = data.identTrend.rmOutliers) + 
+  geom_density(aes(time, fill = graph), alpha = 0.5) + 
+  theme_minimal() + 
+  ggtitle("Identification Trend")
+
+ggplot(data = data.identTrend.rmOutliers) + 
+  geom_density(aes(logTime, fill = graph), alpha = 0.5) + 
+  theme_minimal() + 
+  ggtitle("Identification Trend")
+
+# ggplot(data = data.identTrend.rmOutliers %>% filter(graph == "intSize")) + 
+#   geom_density(aes(logTime, fill = question), alpha = 0.5) + 
+#   theme_minimal() + 
+#   ggtitle("Identification Trend")
+```
+
+```{r IdentTrendAssumptions}
+data.identTrend.rmOutliers %>%
+  group_by(graph) %>%
+  rstatix::shapiro_test(time)
+
+data.identTrend.rmOutliers %>%
+  group_by(graph) %>%
+  rstatix::shapiro_test(logTime)
+
+ggqqplot(data.identTrend.rmOutliers, "time", facet.by = "graph")
+ggqqplot(data.identTrend.rmOutliers, "logTime", facet.by = "graph")
+```
+
+```{r IdentTrendStatTests}
+anova.identTrend <- rstatix::anova_test(data = data.identTrend.rmOutliers, logTime ~ graph, dv = logTime, wid = ResponseId, within = graph)
+rstatix::get_anova_table(anova.identTrend)
+
+model.identTrend <- lme4::lmer(logTime ~ graph + (1|ResponseId), data = data.identTrend.rmOutliers)
+summary(model.identTrend)
+
+model.identTrend.null <- lme4::lmer(logTime ~ (1|ResponseId), 
+                                    data = data.identTrend.rmOutliers, REML=FALSE)
+model.identTrend.test <- lme4::lmer(logTime ~ graph + (1|ResponseId), 
+                                    data = data.identTrend.rmOutliers, REML=FALSE)
+anova(model.identTrend.null, model.identTrend.test)
+
+ggqqplot(resid(model.identTrend))
+hist(resid(model.identTrend))
+
+shapiro.test(resid(model.identTrend))
+
+# coef(model.identCurVal.test)
+
+summary(multcomp::glht(model.identTrend, linfct=multcomp::mcp(graph="Tukey")))
+```
+
+## ESTIMATION (LOOKUP) CURRENT VALUE
+
+Question Wording: What is the output of Machine __ now?
+
+```{r Outlier Check}
+data.estCurVal.idOutliers <- data.estCurVal %>% 
+  mutate(IQR = IQR(time),
+         upper = quantile(time, probs=c( .75), na.rm = FALSE)+1.5*IQR,
+         lower = quantile(time, probs=c( .25), na.rm = FALSE)-1.5*IQR,
+         outlier = if_else((time > upper | time < lower), 1, 0)) %>% 
+  ungroup()
+
+data.estCurVal.idOutliers %>% count(outlier)
+
+data.estCurVal.rmOutliers <- data.estCurVal.idOutliers %>% 
+  filter(outlier == 0) %>% 
+  mutate(logTime = log(time))
+```
+
+```{r}
+ggboxplot(data.estCurVal.idOutliers, x = "graph", y = "time", add = "point", color = "outlier",
+                 title = "Estimation (Lookup) Current Value")
+ggboxplot(data.estCurVal.idOutliers, x = "dist", y = "time", add = "point", color = "outlier",
+                 title = "Estimation (Lookup) Current Value")
+ggpar(ggboxplot(data.estCurVal.rmOutliers, x = "graph", y = "time", add = "point", 
+                 title = "Estimation (Lookup) Current Value"), ylim = c(0,15))
+ggpar(ggboxplot(data.estCurVal.rmOutliers, x = "dist", y = "time", add = "point", 
+                 title = "Estimation (Lookup) Current Value"), ylim = c(0,15))
+```
+
+```{r CIs}
+data.estCurVal.means <- summarySEwithin(data = data.estCurVal.rmOutliers, measurevar = "time", 
+                                       withinvars = "graph", idvar = "ResponseId") %>% 
+  mutate(graph = factor(graph, levels = c("Control", "Emphasis", "IntSize",
+                                          "IntPos", "SepSize", "SepPos"), ordered = T))
+
+ggplot(data.estCurVal.means, aes(x=graph, y=time, group=1)) +
+  geom_errorbar(width=.1, aes(ymin=time-ci, ymax=time+ci)) +
+  geom_point(shape=21, size=3, fill="white") + 
+  ylim(0,10) +
+  theme_minimal() + 
+  ggtitle("Estimation (Lookup) Current Value - Mean & CI")
+```
+
+```{r DensityPlots - Est Cur Val}
+ggplot(data = data.estCurVal.rmOutliers) + 
+  geom_density(aes(time, fill = graph), alpha = 0.5) + 
+  theme_minimal() + 
+  ggtitle("Estimation Current Value")
+
+ggplot(data = data.estCurVal.rmOutliers) + 
+  geom_density(aes(logTime, fill = graph), alpha = 0.5) + 
+  theme_minimal() + 
+  ggtitle("Estimation Current Value")
+```
+
+```{r}
+data.estCurVal.rmOutliers %>%
+  group_by(graph) %>%
+  rstatix::shapiro_test(time)
+
+data.estCurVal.rmOutliers %>%
+  group_by(graph) %>%
+  rstatix::shapiro_test(logTime)
+
+ggqqplot(data.estCurVal.rmOutliers, "time", facet.by = "graph")
+ggqqplot(data.estCurVal.rmOutliers, "logTime", facet.by = "graph")
+```
+
+```{r EstCurVal Stats}
+anova.estCurVal <- rstatix::anova_test(data = data.estCurVal.rmOutliers, logTime ~ graph, dv = logTime, wid = ResponseId, within = graph)
+rstatix::get_anova_table(anova.estCurVal)
+
+model.estCurVal <- lme4::lmer(logTime ~ graph + (1|ResponseId), data = data.estCurVal.rmOutliers)
+summary(model.estCurVal)
+
+model.estCurVal.null <- lme4::lmer(logTime ~ (1|ResponseId), data = data.estCurVal.rmOutliers, REML=FALSE)
+model.estCurVal.test <- lme4::lmer(logTime ~ graph + (1|ResponseId), data = data.estCurVal.rmOutliers, REML=FALSE)
+anova(model.estCurVal.null, model.estCurVal.test)
+
+ggqqplot(resid(model.estCurVal))
+hist(resid(model.estCurVal))
+
+shapiro.test(resid(model.estCurVal))
+shapiro.test(resid(model.estCurVal.test))
+
+# coef(model.estCurVal)
+
+summary(multcomp::glht(model.estCurVal, linfct=multcomp::mcp(graph="Tukey")))
+```
+
+## ESTIMATION (LOOKUP) TREND
+
+Question Wording: Is the overall output of Machine __ increasing, decreasing, or staying the same?
+
+```{r Outlier Check}
+data.estTrend.idOutliers <- data.estTrend %>% 
+  mutate(IQR = IQR(time),
+         upper = quantile(time, probs=c( .75), na.rm = FALSE)+1.5*IQR,
+         lower = quantile(time, probs=c( .25), na.rm = FALSE)-1.5*IQR,
+         outlier = if_else((time > upper | time < lower), 1, 0)) %>% 
+  ungroup()
+
+data.estTrend.idOutliers %>% count(outlier)
+
+data.estTrend.rmOutliers <- data.estTrend.idOutliers %>% 
+  filter(outlier == 0) %>% 
+  mutate(logTime = log(time))
+```
+
+```{r}
+ggboxplot(data.estTrend.idOutliers, x = "graph", y = "time", add = "point", color = "outlier",
+                 title = "Estimation (Lookup) Trend")
+ggboxplot(data.estTrend.idOutliers, x = "dist", y = "time", add = "point", color = "outlier",
+                 title = "Estimation (Lookup) Trend")
+
+ggpar(ggboxplot(data.estTrend.rmOutliers, x = "graph", y = "time", add = "point", 
+                 title = "Estimation (Lookup) Trend"), ylim = c(0, 15))
+ggpar(ggboxplot(data.estTrend.rmOutliers, x = "dist", y = "time", add = "point", 
+                 title = "Estimation (Lookup) Trend"), ylim = c(0, 15))
+```
+
+```{r CIs}
+data.estTrend.means <- summarySEwithin(data = data.estTrend.rmOutliers, measurevar = "time", 
+                                       withinvars = "graph", idvar = "ResponseId") %>% 
+  mutate(graph = factor(graph, levels = c("Control", "Emphasis", "IntSize",
+                                          "IntPos", "SepSize", "SepPos"), ordered = T))
+
+ggplot(data.estTrend.means, aes(x=graph, y=time, group=1)) +
+  geom_errorbar(width=.1, aes(ymin=time-ci, ymax=time+ci)) +
+  geom_point(shape=21, size=3, fill="white") + 
+  ylim(0,10) +
+  theme_minimal() + 
+  ggtitle("Estimation (Lookup) Trend - Mean & CI")
+```
+
+```{r DensityPlots - Est Trend}
+ggplot(data = data.estTrend.rmOutliers) + 
+  geom_density(aes(time, fill = graph), alpha = 0.5) + 
+  theme_minimal() + 
+  ggtitle("Estimation Trend")
+
+ggplot(data = data.estTrend.rmOutliers) + 
+  geom_density(aes(logTime, fill = graph), alpha = 0.5) + 
+  theme_minimal() + 
+  ggtitle("Estimation Trend")
+```
+
+```{r}
+data.estTrend.rmOutliers %>%
+  group_by(graph) %>%
+  rstatix::shapiro_test(time)
+
+data.estTrend.rmOutliers %>%
+  group_by(graph) %>%
+  rstatix::shapiro_test(logTime)
+
+ggqqplot(data.estTrend.rmOutliers, "time", facet.by = "graph")
+ggqqplot(data.estTrend.rmOutliers, "logTime", facet.by = "graph")
+```
+
+```{r Est Trend Stats}
+anova.estTrend <- rstatix::anova_test(data = data.estTrend.rmOutliers, logTime ~ graph, dv = logTime, wid = ResponseId, within = graph)
+rstatix::get_anova_table(anova.estTrend)
+
+model.estTrend <- lme4::lmer(logTime ~ graph + (1|ResponseId), data = data.estTrend.rmOutliers)
+summary(model.estTrend)
+
+model.estTrend.null <- lme4::lmer(logTime ~ (1|ResponseId), data = data.estTrend.rmOutliers, REML=FALSE)
+model.estTrend.test <- lme4::lmer(logTime ~ graph + (1|ResponseId), data = data.estTrend.rmOutliers,
+                                  REML=FALSE, )
+anova(model.estTrend.null, model.estTrend.test)
+
+ggqqplot(resid(model.estCurVal))
+hist(resid(model.estCurVal))
+
+shapiro.test(resid(model.estTrend))
+shapiro.test(resid(model.estTrend.test))
+
+# coef(model.estCurVal.test)
+
+summary(multcomp::glht(model.estTrend, linfct=multcomp::mcp(graph="Tukey")))
+```
+
+## IDENTIFICATION CURRENT VALUE L
+
+Question Wording: Which machine has the lowest output right now?
+
+```{r Outlier Check IdentCurVal L}
+data.identCurValL.idOutliers <- data.identCurValL %>% 
+  mutate(IQR = IQR(time),
+         upper = quantile(time, probs=c( .75), na.rm = FALSE)+1.5*IQR,
+         lower = quantile(time, probs=c( .25), na.rm = FALSE)-1.5*IQR,
+         outlier = if_else((time > upper | time < lower), 1, 0)) %>% 
+  ungroup()
+
+data.identCurValL.idOutliers %>% count(outlier)
+
+data.identCurValL.rmOutliers <- data.identCurValL.idOutliers %>% 
+  filter(outlier == 0) %>% 
+  mutate(logTime = log(time))
+```
+
+
+```{r IdentCurValL Boxplot}
+ggboxplot(data.identCurValL.idOutliers, x = "graph", y = "time", add = "point", color = "outlier",
+                 title = "Identification Current Value")
+ggpar(ggboxplot(data.identCurValL.idOutliers, x = "dist", y = "time", add = "point", color = "outlier",
+                 title = "Identification Current Value"))
+
+ggpar(ggboxplot(data.identCurValL.rmOutliers, x = "graph", y = "time", add = "point", 
+                 title = "Identification Current Value"), ylim = c(0,20))
+ggpar(ggboxplot(data.identCurValL.rmOutliers, x = "dist", y = "time", add = "point", 
+                 title = "Identification Current Value"), ylim = c(0,20))
+```
+
+```{r DensityPlots - Ident Current Value L}
+ggplot(data = data.identCurValL.rmOutliers) + 
+  geom_density(aes(time, fill = graph), alpha = 0.5) + 
+  theme_minimal() + 
+  ggtitle("Identification Current Value L")
+
+ggplot(data = data.identCurValL.rmOutliers) + 
+  geom_density(aes(logTime, fill = graph), alpha = 0.5) + 
+  theme_minimal() + 
+  ggtitle("Identification Current Value L")
+```
+
+```{r CIs}
+data.identCurValL.means <- summarySEwithin(data = data.identCurValL.rmOutliers, measurevar = "time", 
+                                       withinvars = "graph", idvar = "ResponseId") %>% 
+  mutate(graph = factor(graph, levels = c("Control", "Emphasis", "IntSize",
+                                          "IntPos", "SepSize", "SepPos"), ordered = T))
+
+ggplot(data.identCurValL.means, aes(x=graph, y=time, group=1)) +
+  geom_errorbar(width=.1, aes(ymin=time-ci, ymax=time+ci)) +
+  geom_point(shape=21, size=3, fill="white") + 
+  ylim(0,15) +
+  theme_minimal() + 
+  ggtitle("Identification Current Value - Mean & CI")
+```
+
+```{r IdentCurValL Assumptions}
+data.identCurValL.rmOutliers %>%
+  group_by(graph) %>%
+  rstatix::shapiro_test(time)
+
+data.identCurValL.rmOutliers %>%
+  group_by(graph) %>%
+  rstatix::shapiro_test(logTime)
+
+ggplot(data.identCurValL.rmOutliers) + 
+  geom_histogram(aes(x = logTime))
+
+ggqqplot(data.identCurValL.rmOutliers, "time", facet.by = "graph")
+ggqqplot(data.identCurValL.rmOutliers, "logTime", facet.by = "graph")
+```
+
+```{r IdentCurValL StatTests}
+anova.identCurValL <- rstatix::anova_test(data = data.identCurValL.rmOutliers,
+                                         logTime ~ graph, dv = logTime, wid = ResponseId, within = graph)
+rstatix::get_anova_table(anova.identCurValL)
+
+model.identCurValL <- lme4::lmer(logTime ~ graph + (1|ResponseId),
+                                data = data.identCurValL.rmOutliers)
+summary(model.identCurValL)
+
+model.identCurValL.null <- lme4::lmer(logTime ~ (1|ResponseId), data = data.identCurValL.rmOutliers,
+                                     REML=FALSE)
+model.identCurValL.test <- lme4::lmer(logTime ~ graph + (1|ResponseId), data.identCurValL.rmOutliers,
+                                     REML=FALSE)
+anova(model.identCurValL.null, model.identCurValL.test)
+
+ggqqplot(resid(model.identCurValL))
+hist(resid(model.identCurValL))
+
+#plot(model.identCurValL)
+
+shapiro.test(resid(model.identCurValL))
+shapiro.test(resid(model.identCurValL.test))
+
+summary(multcomp::glht(model.identCurValL, linfct=multcomp::mcp(graph="Tukey")))
+```
+
+
+## IDENTIFICATION TREND L
+
+Question Wording: Find 3 plots that have an overall output decreasing over time. There may be more, but please select only 3.
+
+```{r Outlier Check}
+data.identTrendL.idOutliers <- data.identTrendL %>% 
+  mutate(IQR = IQR(time),
+         upper = quantile(time, probs=c( .75), na.rm = FALSE)+1.5*IQR,
+         lower = quantile(time, probs=c( .25), na.rm = FALSE)-1.5*IQR,
+         outlier = if_else((time > upper | time < lower), 1, 0)) %>% 
+  ungroup()
+
+data.identTrendL.idOutliers %>% count(outlier)
+
+data.identTrendL.rmOutliers <- data.identTrendL.idOutliers %>% 
+  filter(outlier == 0) %>% 
+  mutate(logTime = log(time))
+```
+
+```{r IdentTrendL Boxplot}
+ggboxplot(data.identCurVal.idOutliers, x = "graph", y = "time", add = "point", color = "outlier",
+                 title = "Identification Trend")
+ggpar(ggboxplot(data.identCurVal.idOutliers, x = "dist", y = "time", add = "point", color = "outlier",
+                 title = "Identification Trend"))
+
+ggpar(ggboxplot(data.identCurVal.rmOutliers, x = "graph", y = "time", add = "point", 
+                 title = "Identification Trend"), ylim = c(0,20))
+ggpar(ggboxplot(data.identCurVal.rmOutliers, x = "dist", y = "time", add = "point", 
+                 title = "Identification Trend"), ylim = c(0,20))
+```
+
+```{r CIs}
+data.identTrendL.means <- summarySEwithin(data = data.identTrendL.rmOutliers, measurevar = "time", 
+                                       withinvars = "graph", idvar = "ResponseId") %>% 
+  mutate(graph = factor(graph, levels = c("Control", "Emphasis", "IntSize",
+                                          "IntPos", "SepSize", "SepPos"), ordered = T))
+
+ggplot(data.identTrendL.means, aes(x=graph, y=time, group=1)) +
+  geom_errorbar(width=.1, aes(ymin=time-ci, ymax=time+ci)) +
+  geom_point(shape=21, size=3, fill="white") + 
+  ylim(0,21) +
+  theme_minimal() + 
+  ggtitle("Identification Trend - Mean & CI")
+```
+
+```{r DensityPlots - Ident Trend L}
+ggplot(data = data.identTrendL.rmOutliers) + 
+  geom_density(aes(time, fill = graph), alpha = 0.5) + 
+  theme_minimal() + 
+  ggtitle("Identification Trend")
+
+ggplot(data = data.identTrendL.rmOutliers) + 
+  geom_density(aes(logTime, fill = graph), alpha = 0.5) + 
+  theme_minimal() + 
+  ggtitle("Identification Trend")
+
+# ggplot(data = data.identTrendL.rmOutliers %>% filter(graph == "intSize")) + 
+#   geom_density(aes(logTime, fill = question), alpha = 0.5) + 
+#   theme_minimal() + 
+#   ggtitle("Identification Trend")
+```
+
+```{r IdentTrendL Assumptions}
+data.identTrendL.rmOutliers %>%
+  group_by(graph) %>%
+  rstatix::shapiro_test(time)
+
+data.identTrendL.rmOutliers %>%
+  group_by(graph) %>%
+  rstatix::shapiro_test(logTime)
+
+ggqqplot(data.identTrendL.rmOutliers, "time", facet.by = "graph")
+ggqqplot(data.identTrendL.rmOutliers, "logTime", facet.by = "graph")
+```
+
+```{r IdentTrendL StatTests}
+anova.identTrendL <- rstatix::anova_test(data = data.identTrendL.rmOutliers, logTime ~ graph, dv = logTime, wid = ResponseId, within = graph)
+rstatix::get_anova_table(anova.identTrendL)
+
+model.identTrendL <- lme4::lmer(logTime ~ graph + (1|ResponseId), data = data.identTrendL.rmOutliers)
+summary(model.identTrendL)
+
+model.identTrendL.null <- lme4::lmer(logTime ~ (1|ResponseId), 
+                                    data = data.identTrendL.rmOutliers, REML=FALSE)
+model.identTrendL.test <- lme4::lmer(logTime ~ graph + (1|ResponseId), 
+                                    data = data.identTrendL.rmOutliers, REML=FALSE)
+anova(model.identTrendL.null, model.identTrendL.test)
+
+ggqqplot(resid(model.identTrendL))
+hist(resid(model.identTrendL))
+
+shapiro.test(resid(model.identTrendL))
+shapiro.test(resid(model.identTrendL.test))
+
+# coef(model.identCurVal.test)
+
+summary(multcomp::glht(model.identTrendL, linfct=multcomp::mcp(graph="Tukey")))
+```
+
+## SUMMARY STATS
+
+```{r SummaryStats}
+sumStats.identCurVal <- data.identCurVal.rmOutliers %>% 
+  group_by(graph) %>% 
+  summarise(mean = mean(time), sd = sd(time))
+
+sumStats.identTrend <- data.identTrend.rmOutliers %>% 
+  group_by(graph) %>% 
+  summarise(mean = mean(time), sd = sd(time))
+
+sumStats.estCurVal <- data.estCurVal.rmOutliers %>% 
+  group_by(graph) %>% 
+  summarise(mean = mean(time), sd = sd(time))
+
+sumStats.estTrend <- data.estTrend.rmOutliers %>% 
+  group_by(graph) %>% 
+  summarise(mean = mean(time), sd = sd(time))
+
+sumStats.identCurValL <- data.identCurValL.rmOutliers %>% 
+  group_by(graph) %>% 
+  summarise(mean = mean(time), sd = sd(time))
+
+sumStats.identTrendL <- data.identTrendL.rmOutliers %>% 
+  group_by(graph) %>% 
+  summarise(mean = mean(time), sd = sd(time))
+```
+
+## ERROR ANALYSIS
+
+```{r Error Descriptive}
+#Ident Cur Val
+with(data.identCurVal, table(graph, ans_TF))
+#Ident Trend
+with(data.identTrend, table(graph, ans_TF))
+#Est Cur Val
+with(data.estCurVal, table(graph, ans_TF))
+#Est Trend
+with(data.estTrend, table(graph, ans_TF))
+#Ident Cur Val L
+with(data.identCurValL, table(graph, ans_TF))
+#Ident Trend L
+with(data.identTrendL, table(graph, ans_TF))
+
+#Ident Cur Val
+with(data.identCurVal, table(dist, ans_TF))
+#Ident Trend
+with(data.identTrend, table(dist, ans_TF))
+#Est Cur Val
+with(data.estCurVal, table(dist, ans_TF))
+#Est Trend
+with(data.estTrend, table(dist, ans_TF))
+#Ident Cur Val L
+with(data.identCurValL, table(dist, ans_TF))
+#Ident Trend L
+with(data.identTrendL, table(dist, ans_TF))
+```
+
+```{r Error Count Plots}
+ggplot(data = data.participant %>% mutate(ans = factor(ans_TF),
+                                          graph = factor(graph, levels = c("Control", "Emphasis", "IntSize",
+                                          "IntPos", "SepSize", "SepPos"), ordered = T))) + 
+  geom_bar(aes(x = graph, group = ans, fill = ans), position = position_stack()) + 
+  lemon::facet_rep_wrap(~task, repeat.tick.labels = T)
+
+ggplot(data = data.participant %>% mutate(ans = factor(ans))) + 
+  geom_bar(aes(x = dist, group = ans, fill = ans), position = position_stack())
+```
+```{r ErrorAnalysis IdentCurVal}
+data.identCurVal$ans <- factor(data.identCurVal$ans)
+data.identCurVal$ResponseId <- factor(data.identCurVal$ResponseId)
+
+model.identCurVal.error.null <- lme4::glmer(ans ~ (1|ResponseId), data = data.identCurVal,
+                                         family = binomial(link = "logit"))
+model.identCurVal.error.test <- lme4::glmer(ans ~ graph + (1|ResponseId), data = data.identCurVal,
+                                  family = binomial(link = "logit"))
+# model.estTrend.error.trial <- lme4::glmer(ans ~ graph + (1|question) + (1|ResponseId), 
+#                                           data = data.estTrend.withErrors,
+#                                           family = binomial(link = "logit"))
+anova(model.identCurVal.error.null, model.identCurVal.error.test)
+
+summary(model.identCurVal.error.test)
+
+summary(multcomp::glht(model.identCurVal.error.test, linfct=multcomp::mcp(graph="Tukey")))
+```
+
+```{r ErrorAnalysis IdentTrend}
+data.identTrend$ans <- factor(data.identTrend$ans)
+data.identTrend$ResponseId <- factor(data.identTrend$ResponseId)
+
+model.identTrend.error.null <- lme4::glmer(ans ~ (1|ResponseId), data = data.identTrend,
+                                         family = binomial(link = "logit"))
+model.identTrend.error.test <- lme4::glmer(ans ~ graph + (1|ResponseId), data = data.identTrend,
+                                  family = binomial(link = "logit"))
+# model.estTrend.error.trial <- lme4::glmer(ans ~ graph + (1|question) + (1|ResponseId), 
+#                                           data = data.estTrend.withErrors,
+#                                           family = binomial(link = "logit"))
+anova(model.identTrend.error.null, model.identTrend.error.test)
+
+summary(model.identTrend.error.test)
+
+summary(multcomp::glht(model.identTrend.error.test, linfct=multcomp::mcp(graph="Tukey")))
+```
+
+```{r ErrorAnalysis EstCurVal}
+data.estCurVal$ans <- factor(data.estCurVal$ans)
+data.estCurVal$ResponseId <- factor(data.estCurVal$ResponseId)
+
+model.estCurVal.error.null <- lme4::glmer(ans ~ (1|ResponseId), data = data.estCurVal,
+                                         family = binomial(link = "logit"))
+model.estCurVal.error.test <- lme4::glmer(ans ~ graph + (1|ResponseId), data = data.estCurVal,
+                                  family = binomial(link = "logit"))
+# model.estTrend.error.trial <- lme4::glmer(ans ~ graph + (1|question) + (1|ResponseId), 
+#                                           data = data.estTrend.withErrors,
+#                                           family = binomial(link = "logit"))
+anova(model.estCurVal.error.null, model.estCurVal.error.test)
+
+summary(model.estCurVal.error.test)
+
+summary(multcomp::glht(model.estCurVal.error.test, linfct=multcomp::mcp(graph="Tukey")))
+```
+
+
+```{r ErrorAnalysis EstTrend}
+data.estTrend$ans <- factor(data.estTrend$ans)
+data.estTrend$ResponseId <- factor(data.estTrend$ResponseId)
+
+model.estTrend.error.null <- lme4::glmer(ans ~ (1|ResponseId), data = data.estTrend,
+                                         family = binomial(link = "logit"))
+model.estTrend.error.test <- lme4::glmer(ans ~ graph + (1|ResponseId), data = data.estTrend,
+                                  family = binomial(link = "logit"))
+# model.estTrend.error.trial <- lme4::glmer(ans ~ graph + (1|question) + (1|ResponseId), 
+#                                           data = data.estTrend.withErrors,
+#                                           family = binomial(link = "logit"))
+anova(model.estTrend.error.null, model.estTrend.error.test)
+
+summary(model.estTrend.error.test)
+
+summary(multcomp::glht(model.estTrend.error.test, linfct=multcomp::mcp(graph="Tukey")))
+```
+
+```{r ErrorAnalysis IdentCurValL}
+data.identCurValL$ans <- factor(data.identCurValL$ans)
+data.identCurValL$ResponseId <- factor(data.identCurValL$ResponseId)
+
+model.identCurValL.error.null <- lme4::glmer(ans ~ (1|ResponseId), data = data.identCurValL,
+                                         family = binomial(link = "logit"))
+model.identCurValL.error.test <- lme4::glmer(ans ~ graph + (1|ResponseId), data = data.identCurValL,
+                                  family = binomial(link = "logit"))
+# model.estTrend.error.trial <- lme4::glmer(ans ~ graph + (1|question) + (1|ResponseId), 
+#                                           data = data.estTrend.withErrors,
+#                                           family = binomial(link = "logit"))
+anova(model.identCurValL.error.null, model.identCurValL.error.test)
+
+summary(model.identCurValL.error.test)
+
+summary(multcomp::glht(model.identCurValL.error.test, linfct=multcomp::mcp(graph="Tukey")))
+```
+
+```{r ErrorAnalysis IdentTrendL}
+data.identTrendL$ans <- factor(data.identTrendL$ans)
+data.identTrendL$ResponseId <- factor(data.identTrendL$ResponseId)
+
+model.identTrendL.error.null <- lme4::glmer(ans ~ (1|ResponseId), data = data.identTrendL,
+                                         family = binomial(link = "logit"))
+model.identTrendL.error.test <- lme4::glmer(ans ~ graph + (1|ResponseId), data = data.identTrendL,
+                                  family = binomial(link = "logit"))
+# model.estTrend.error.trial <- lme4::glmer(ans ~ graph + (1|question) + (1|ResponseId), 
+#                                           data = data.estTrend.withErrors,
+#                                           family = binomial(link = "logit"))
+anova(model.identTrendL.error.null, model.identTrendL.error.test)
+
+summary(model.identTrendL.error.test)
+
+summary(multcomp::glht(model.identTrendL.error.test, linfct=multcomp::mcp(graph="Tukey")))
+```
+
+
+## LIKERT & QUALITATIVE ANALYSIS
+
+```{r Likert}
+data.clean.answerscoded %>% 
+  count(`Standard Ratings`)
+
+data.clean.answerscoded %>% 
+  count(`Emphasis Ratings`)
+
+data.clean.answerscoded %>% 
+  count(`IntSize Ratings`)
+
+data.clean.answerscoded %>% 
+  count(`IntPos Ratings`)
+
+data.clean.answerscoded %>% 
+  count(`SepSize Ratings`)
+
+data.clean.answerscoded %>% 
+  count(`SepPos Ratings`)
+```
+
+```{r LikertCleaning}
+data.clean.likert <- data.clean.answerscoded %>%
+  distinct(ResponseId, .keep_all = T) %>% 
+  select(ResponseId, `Standard Ratings`, `Emphasis Ratings`, `IntSize Ratings`, `IntPos Ratings`,
+         `SepSize Ratings`, `SepPos Ratings`) %>% 
+  mutate(standard = factor(`Standard Ratings`, levels = c("Very difficult", "Somewhat difficult",
+                        "Neither easy nor difficult", "Somewhat easy", "Very easy"), ordered = T),
+         standard = as.numeric(standard),
+         emphasis = factor(`Emphasis Ratings`, levels = c("Very difficult", "Somewhat difficult",
+                        "Neither easy nor difficult", "Somewhat easy", "Very easy"), ordered = T),
+         emphasis = as.numeric(emphasis),
+         intSize = factor(`IntSize Ratings`, levels = c("Very difficult", "Somewhat difficult",
+                        "Neither easy nor difficult", "Somewhat easy", "Very easy"), ordered = T),
+         intSize = as.numeric(intSize),
+         intPos = factor(`IntPos Ratings`, levels = c("Very difficult", "Somewhat difficult",
+                        "Neither easy nor difficult", "Somewhat easy", "Very easy"), ordered = T),
+         intPos = as.numeric(intPos),
+         sepSize = factor(`SepSize Ratings`, levels = c("Very difficult", "Somewhat difficult",
+                        "Neither easy nor difficult", "Somewhat easy", "Very easy"), ordered = T),
+         sepSize = as.numeric(sepSize),
+         sepPos = factor(`SepPos Ratings`, levels = c("Very difficult", "Somewhat difficult",
+                        "Neither easy nor difficult", "Somewhat easy", "Very easy"), ordered = T),
+         sepPos = as.numeric(sepPos)) %>% 
+  select(-c(`Standard Ratings`, `Emphasis Ratings`, `IntSize Ratings`, `IntPos Ratings`,
+         `SepSize Ratings`, `SepPos Ratings`)) %>% 
+  pivot_longer(cols = c(standard, emphasis, intSize, intPos, sepSize, sepPos), 
+               names_to = "graph", values_to = "likert") %>% 
+  mutate(graph = factor(graph, levels = c("standard", "emphasis", "intSize", 
+                                          "intPos", "sepSize", "sepPos"), ordered = T))
+```
+
+```{r LikertAnalysis}
+# lm.likert <- lm(likert ~ graph, data = data.clean.likert)
+# anova(lm.likert)
+
+anova.likert <- rstatix::anova_test(data = data.clean.likert, likert ~ graph, dv = likert, 
+                                    wid = ResponseId, within = graph)
+rstatix::get_anova_table(anova.likert)
+
+model.likert <- lme4::lmer(likert ~ graph + (1|ResponseId), data = data.clean.likert)
+model.likert.null <- lme4::lmer(likert ~ (1|ResponseId), data = data.clean.likert)
+
+anova(model.likert.null, model.likert)
+
+summary(model.likert)
+
+summary(multcomp::glht(model.likert, linfct=multcomp::mcp(graph="Tukey")))
+```
+
+```{r LikertGraph}
+ggplot(data = data.clean.likert, aes(x = likert)) + 
+  geom_histogram(binwidth = 1, color = "gray75") + 
+  lemon::facet_rep_wrap(vars(graph), repeat.tick.labels = T) + 
+  theme_minimal()
+
+data.clean.likert <- data.clean.likert %>% 
+  mutate(label = graph,
+         label = fct_recode(label,  "Control" = "standard", "Emphasis" = "emphasis", "Int. Size" = "intSize", 
+                                          "Int. Position" = "intPos", "Sep. Size" = "sepSize", 
+                            "Sep. Position" = "sepPos"))
+
+data.clean.likert.factor <- data.clean.likert %>% 
+  mutate(likert = factor(likert, ordered = T, labels = c("1", "2", "3", "4", "5")))
+
+data.clean.likert.summarized <- data.clean.likert.factor %>% 
+  group_by(label) %>% 
+  dplyr::count(likert) %>% 
+  mutate(percent = n/54)
+
+library(RColorBrewer)
+ggplot(data = data.clean.likert.factor, 
+       aes(x = label, fill = reorder(likert, desc(likert)),
+               group = reorder(likert, desc(likert)))) + 
+  geom_bar(width = 0.7, position = "fill") +
+  geom_text(aes(label = ..count..), stat = "count", 
+            position = position_fill(vjust = 0.5), 
+            size = 3) + 
+  scale_y_continuous(expand = expansion(mult = c(0, 0)),
+                   breaks = c(seq(0, 1, by = .2)),
+                   limits = c(0,1),
+                   labels = scales::label_percent(),
+                   name = "% of Responses") + 
+  scale_x_discrete(expand = expansion(mult = c(0, 0)), limits = rev) + 
+  scale_fill_manual(values = rev(brewer.pal(5, "Spectral")), guide = "none") + 
+  coord_flip() + 
+  theme_minimal() + 
+  theme(axis.title.y = element_blank(),
+        axis.title.x = element_text(margin = margin(t = 12, r = 0, b = 0, l = 0)),
+        axis.text.y = element_text(margin = margin(t = 0, r = 5, b = 0, l = 0)),
+        axis.text.x = element_text(margin = margin(t = 5, r = 0, b = 0, l = 0)),
+        aspect.ratio = 1/2.5,
+        plot.margin = margin(t = 0,
+                             r = 20, 
+                             b = 15,
+                             l = 10))
+```
+
+```{r}
+data.likert.means <- summarySEwithin(data = data.clean.likert, measurevar = "likert", 
+                                       withinvars = "graph", idvar = "ResponseId")
+
+ggplot(data.likert.means, aes(x=graph, y=likert, group=1)) +
+  geom_errorbar(width=.1, aes(ymin=likert-ci, ymax=likert+ci)) +
+  geom_point(shape=21, size=3, fill="white") + 
+  ylim(0,5) +
+  theme_minimal() + 
+  ggtitle("Likert - Mean & CI")
+```
+
+## QUALITATIVE OUTPUT
+
+```{r QualitativeResponseOutputs}
+data.clean.qualitative <- data.clean.answerscoded %>% 
+  select(ResponseId, QualitativeResponseWhy, Feedback) %>% 
+  distinct(.keep_all = T)
+
+# write_csv(data.clean.qualitative, "NonComparativeQualitativeResponses.csv")
+```
+
+
+## Outlier Analysis
+
+
+```{r Outlier Counts By Task & Participant}
+data.outliers.identCurVal <- data.identCurVal.idOutliers %>% 
+  filter(outlier == 1) %>% 
+  mutate(task = "identCurVal")
+  
+data.outliers.identTrend <- data.identTrend.idOutliers %>% 
+  filter(outlier == 1) %>% 
+  mutate(task = "identTrend")
+
+data.outliers.estCurVal <- data.estCurVal.idOutliers %>% 
+  filter(outlier == 1) %>% 
+  mutate(task = "estCurVal")
+  
+data.outliers.estTrend <- data.estTrend.idOutliers %>% 
+  filter(outlier == 1) %>% 
+  mutate(task = "estTrend")
+
+data.outliers.identCurValL <- data.identCurValL.idOutliers %>% 
+  filter(outlier == 1) %>% 
+  mutate(task = "identCurValL")
+  
+data.outliers.identTrendL <- data.identTrendL.idOutliers %>% 
+  filter(outlier == 1) %>% 
+  mutate(task = "identTrendL")
+
+data.outliers <- bind_rows(data.outliers.identCurVal, data.outliers.identTrend,
+                           data.outliers.estCurVal, data.outliers.estTrend,
+                           data.outliers.identCurValL, data.outliers.identTrendL) %>% 
+  mutate(question = as.numeric(question))
+
+ggplot(data.outliers) + 
+  geom_bar(aes(x = task)) + 
+  theme_minimal() +
+  ggtitle("Number of Outliers By Task")
+
+ggplot(data.outliers) + 
+  geom_bar(aes(x = ResponseId)) + 
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust=1)) +
+  ggtitle("Number of Outliers By Participant")
+
+ggplot(data.outliers) + 
+  geom_bar(aes(x = dist)) + 
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust=1)) +
+  ggtitle("Number of Outliers By Distribution")
+
+ggplot(data.outliers) + 
+  geom_bar(aes(x = dist)) + 
+  facet_wrap(~ResponseId) + 
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust=1)) +
+  ggtitle("Number of Outliers By Distribution By Participant")
+
+# data.outliers %>% group_by(ResponseId) %>% count(outlier)
+# "R_6vlxynAAvl3T5Vn"
+```
+
+
+
+## Participant Analysis
+
+
+
+```{r Participants}
+data.identCurVal <- data.identCurVal %>% 
+  mutate(task = "identCurVal")
+
+data.identTrend <- data.identTrend %>% 
+  mutate(task = "identTrend")
+
+data.estCurVal <- data.estCurVal %>% 
+  mutate(task = "estCurVal")
+
+data.estTrend <- data.estTrend %>% 
+  mutate(task = "estTrend")
+
+data.identCurValL <- data.identCurValL %>% 
+  mutate(task = "identCurValL")
+
+data.identTrendL <- data.identTrendL %>% 
+  mutate(task = "identTrendL")
+
+data.participant <- bind_rows(data.identCurVal, data.identTrend,
+                              data.estCurVal, data.estTrend,
+                              data.identCurValL, data.identTrendL)
+
+participantMeans <- data.participant %>% 
+  group_by(ResponseId) %>% 
+  mutate(mean = mean(time),
+         sd = sd(time)) %>%
+  arrange(desc(mean)) %>% 
+  ungroup()
+
+participantMeans <- participantMeans %>% 
+  distinct(ResponseId, .keep_all = T) %>% 
+  arrange(desc(mean)) %>% 
+  mutate(index = row_number()) %>% 
+  full_join(participantMeans) %>% 
+  arrange(ResponseId) %>% 
+  fill(index, .direction = "down")
+
+ggplot(data = participantMeans) + 
+  geom_line(aes(x = dist, y = time, group = ResponseId)) +
+  # scale_y_continuous(limits = c(NA, 45)) + 
+  facet_wrap(~ResponseId) + 
+  # geom_smooth(aes(x = question, y = time, group = ResponseId),
+  #             se = F, method = "lm") + 
+  geom_hline(aes(yintercept = mean), color = "blue")
+
+ggplot(data = participantMeans) + 
+  geom_line(aes(x = dist, y = time, group = ResponseId)) +
+  scale_y_continuous(limits = c(NA, 45)) +
+  facet_wrap(~ResponseId) + 
+  # geom_smooth(aes(x = question, y = time, group = ResponseId),
+  #             se = F, method = "lm") + 
+  geom_hline(aes(yintercept = mean), color = "blue")
+
+participantMeans.distinct <- participantMeans %>% 
+  distinct(ResponseId, .keep_all = T)
+
+ggplot(participantMeans.distinct) + 
+  geom_histogram(aes(mean), binwidth = 2)
+
+participantMeans %>% filter(index <= 5) %>% distinct(ResponseId) %>% pull(ResponseId)
+
+ggplot(data = participantMeans %>% filter(ResponseId %in% c("R_1mvDG6OBKXvV8aZ", "R_1nzdDkm1U93oMZX",
+                                                            "R_5SGN6Flg7FnJoY1", "R_6vlxynAAvl3T5Vn",
+                                                            "R_7u7OMrs4wAwJkpr", "R_5OH6k0XbwZWCrAT"))) + 
+  geom_line(aes(x = dist, y = time, group = ResponseId)) +
+  facet_wrap(~ResponseId) + 
+  geom_hline(aes(yintercept = mean), color = "blue")
+
+```
+
+## VISUALIZATIONS
+
+```{r Confidence Interval Adjusted Plots}
+data.identCurVal.means <- data.identCurVal.means %>% 
+  mutate(meanTimeAdj = time - (data.identCurVal.means %>% filter(graph == "Control") %>% pull(time))) %>% 
+  mutate(task = "Ident. Current Value Highest")
+data.identTrend.means <- data.identTrend.means %>% 
+  mutate(meanTimeAdj = time - (data.identTrend.means %>% filter(graph == "Control") %>% pull(time))) %>% 
+  mutate(task = "Ident. Trend Increasing")
+data.estCurVal.means <- data.estCurVal.means %>% 
+  mutate(meanTimeAdj = time - (data.estCurVal.means %>% filter(graph == "Control") %>% pull(time))) %>% 
+  mutate(task = "Lookup Current Value")
+data.estTrend.means <- data.estTrend.means %>% 
+  mutate(meanTimeAdj = time - (data.estTrend.means %>% filter(graph == "Control") %>% pull(time))) %>% 
+  mutate(task = "Lookup Trend")
+data.identCurValL.means <- data.identCurValL.means %>% 
+  mutate(meanTimeAdj = time - (data.identCurValL.means %>% filter(graph == "Control") %>% pull(time))) %>% 
+  mutate(task = "Ident. Current Value Lowest")
+data.identTrendL.means <- data.identTrendL.means %>% 
+  mutate(meanTimeAdj = time - (data.identTrendL.means %>% filter(graph == "Control") %>% pull(time))) %>% 
+  mutate(task = "Ident. Trend Decreasing")
+
+means <- bind_rows(data.identCurVal.means, data.identTrend.means,
+                   data.estCurVal.means, data.estTrend.means,
+                   data.identCurValL.means, data.identTrendL.means) %>% 
+  mutate(task = factor(task, levels = c("Ident. Current Value Highest", 
+                                        "Ident. Current Value Lowest",
+                                        "Ident. Trend Increasing", 
+                        "Ident. Trend Decreasing",
+                       "Lookup Current Value","Lookup Trend"), ordered = T),
+         label = graph,
+         label = fct_recode(label,"Control" = "Control", "Emphasis" = "Emphasis", 
+                            "Int. Size" = "IntSize", "Int. Position" = "IntPos", 
+                            "Sep. Size" = "SepSize", "Sep. Position" = "SepPos"),
+         label = factor(label, levels = rev(c("Control", "Emphasis", 
+                            "Int. Size", "Int. Position", 
+                            "Sep. Size", "Sep. Position")),
+                        ordered =T))
+
+ggplot(means, aes(x=label, y=meanTimeAdj)) +
+  geom_hline(yintercept = 0, linewidth = 0.3, color = "gray50") +
+  geom_hline(data = means %>% filter(graph == "Control"), 
+             aes(yintercept = meanTimeAdj + ci), linewidth = 0.4, color = "gray75", linetype = 2) +
+  geom_hline(data = means %>% filter(graph == "Control"),
+             aes(yintercept = meanTimeAdj - ci), linewidth = 0.4, color = "gray75", linetype = 2) +
+  geom_errorbar(width=0, aes(ymin=meanTimeAdj-ci, ymax=meanTimeAdj+ci, color = task), show.legend = F,
+                linewidth = 1.6) +
+  geom_point(aes(color = task), shape=21, size=3.6, fill="white", show.legend = F) + 
+  scale_color_manual(values = c("#317F9B","#AA4B53","#13B6B9","#E2923C","#5F51B8","#9990E0")) +
+  scale_y_continuous(limits = c(-3, 5), expand = expansion(mult = c(0, 0)), name = "Normalized Mean Time") +
+  theme_minimal() +
+  coord_flip() +
+  facet_grid(rows = vars(task)) + 
+  theme(axis.title.y = element_blank(),
+        axis.title.x = element_text(margin = margin(t = 12, r = 0, b = 0, l = 0)),
+        axis.text.y = element_text(margin = margin(t = 0, r = 5, b = 0, l = 0),
+                                   size = rel(1.2)),
+        axis.text.x = element_text(margin = margin(t = 5, r = 0, b = 0, l = 0),
+                                   size = rel(1.2)),
+        plot.margin = margin(t = 10,
+                             r = 10, 
+                             b = 10,
+                             l = 10),
+        panel.spacing = unit(30, "pt"),
+        strip.text.y = element_blank())
+
+ggsave("GraphNonComparativeCIs.svg", width=7, height=11)
+ggsave("GraphNonComparativeCIs.png", width=7, height=11, bg = "white")
+```
+
+```{r CI non-normalized}
+ggplot(means, aes(x=label, y=time)) +
+  # geom_hline(yintercept = 0, linewidth = 0.3, color = "gray50") +
+  # geom_hline(data = means %>% filter(graph == "Control"), 
+  #            aes(yintercept = meanTimeAdj + ci), linewidth = 0.4, color = "gray75", linetype = 2) +
+  # geom_hline(data = means %>% filter(graph == "Control"),
+  #            aes(yintercept = meanTimeAdj - ci), linewidth = 0.4, color = "gray75", linetype = 2) +
+  geom_errorbar(width=0, aes(ymin=time-ci, ymax=time+ci, color = task), show.legend = F,
+                linewidth = 1.6) +
+  geom_point(aes(color = task), shape=21, size=3.6, fill="white", show.legend = F) + 
+  scale_color_manual(values = c("#317F9B","#13B6B9","#AA4B53","#E2923C","#5F51B8","#9990E0")) +
+  scale_y_continuous(limits = c(NA,NA), expand = expansion(mult = c(0, 0)), name = "Normalized Mean Time") +
+  theme_minimal() +
+  coord_flip() +
+  facet_grid(rows = vars(task)) + 
+  theme(axis.title.y = element_blank(),
+        axis.title.x = element_text(margin = margin(t = 12, r = 0, b = 0, l = 0)),
+        axis.text.y = element_text(margin = margin(t = 0, r = 5, b = 0, l = 0)),
+        axis.text.x = element_text(margin = margin(t = 5, r = 0, b = 0, l = 0)),
+        plot.margin = margin(t = 10,
+                             r = 10, 
+                             b = 10,
+                             l = 10))
+
+# ggsave("GraphNonComparativeCIs.svg", width=7, height=11)
+# ggsave("GraphNonComparativeCIs.png", width=7, height=11, bg = "white")
+```
+
+
+```{r Error Plots}
+nrow(data.participant %>% distinct(ResponseId))
+
+data.participant.error <- data.participant %>% 
+  mutate(ans = factor(ans_TF)) %>% 
+  mutate(task = fct_recode(task, 
+                           "Ident. Current Value Highest" = "identCurVal",
+                           "Ident. Trend Increasing" = "identTrend",
+                           "Ident. Current Value Lowest" = "identCurValL",
+                           "Ident. Trend Decreasing" = "identTrendL",
+                           "Lookup Current Value" = "estCurVal",
+                           "Lookup Trend" = "estTrend"),
+         task = factor(task, levels = c("Ident. Current Value Highest", 
+                                        "Ident. Trend Increasing", 
+                       "Ident. Current Value Lowest", "Ident. Trend Decreasing",
+                       "Lookup Current Value","Lookup Trend"), ordered = T),
+         label = graph,
+         label = fct_recode(label,"Control" = "Control", "Emphasis" = "Emphasis", 
+                            "Int. Size" = "IntSize", "Int. Position" = "IntPos", 
+                            "Sep. Size" = "SepSize", "Sep. Position" = "SepPos"),
+         label = factor(label, levels = rev(c("Control", "Emphasis", 
+                            "Int. Size", "Int. Position", 
+                            "Sep. Size", "Sep. Position")),
+                        ordered =T))
+
+ggplot(data = data.participant.error) + 
+  geom_bar(aes(x = label, group = ans, fill = ans), position = position_stack()) + 
+  geom_text(data = data.participant.error %>% filter(ans == T),
+            aes(x = label, group = ans, label = ..count..), stat = "count", 
+            position = position_fill(vjust = 0.5), 
+            size = 3, hjust = 0) + 
+  scale_fill_manual(labels = c("Incorrect", "Correct"),
+                    values = c("#EB919A", "#73BCE6"),
+                    name = "Answer Type") +
+  scale_y_continuous(expand = expansion(mult = c(0.01, 0)),
+                     breaks = c(0,10,20,30,40,49),
+                     labels = c("0","10","20","30","40","49"),
+                     name = "Number of Errors") +
+  scale_x_discrete(expand = expansion(mult = c(0.12, 0))) +
+  coord_flip() + 
+  facet_grid(rows = vars(task)) +
+  theme_minimal() +
+  theme(axis.title.y = element_blank(),
+        axis.title.x = element_text(margin = margin(t = 12, r = 0, b = 0, l = 0)),
+        axis.text.y = element_text(margin = margin(t = 0, r = 2, b = 0, l = 0)),
+        axis.text.x = element_text(margin = margin(t = 1, r = 0, b = 0, l = 0)),
+        plot.margin = margin(t = 10,
+                             r = 10, 
+                             b = 10,
+                             l = 10),
+        panel.spacing = unit(12, "pt"),
+        legend.position = "bottom")
+
+ggsave("GraphNonComparativeErrors.pdf", width=5, height=10)
+ggsave("GraphNonComparativeErrors.png", width=5, height=10, bg = "white")
+```
+
+```{r Error plots v2}
+data.participant.error.summarize <- data.participant.error %>% 
+  group_by(task, label, ans) %>% 
+  count() %>% 
+  ungroup() %>% 
+  complete(task, label, ans, fill = list(n = 0))
+
+ggplot(data = data.participant.error.summarize %>% filter(ans == F)) + 
+  geom_col(aes(x = label, y = n), fill = "#EB919A") + 
+  geom_text(aes(x = label, y = n, label =  n), 
+            size = 4, hjust = -0.7) + 
+  # scale_fill_manual(labels = c("Incorrect", "Correct"),
+  #                   values = c("#EB919A", "#73BCE6"),
+  #                   name = "Answer Type") +
+  scale_y_continuous(expand = expansion(mult = c(0.01, 0)),
+                     breaks = c(0,10,20,30,40,49),
+                     labels = c("0","10","20","30","40","49"),
+                     name = "Number of Errors",
+                     limits = c(0,49)) +
+  scale_x_discrete(expand = expansion(mult = c(0.12, 0))) +
+  coord_flip() + 
+  facet_grid(rows = vars(task)) +
+  theme_minimal() +
+  theme(axis.title.y = element_blank(),
+        axis.title.x = element_text(margin = margin(t = 12, r = 0, b = 0, l = 0)),
+        axis.text.y = element_text(margin = margin(t = 0, r = 2, b = 0, l = 0),
+                                   size = rel(1.2)),
+        axis.text.x = element_text(margin = margin(t = 1, r = 0, b = 0, l = 0),
+                                   size = rel(1.2)),
+        plot.margin = margin(t = 10,
+                             r = 10, 
+                             b = 10,
+                             l = 10),
+        legend.position = "bottom",
+        panel.spacing = unit(30, "pt"),
+        strip.text.y = element_blank(),
+        panel.grid.minor = element_blank(),
+        panel.grid.major.x = element_blank(),
+        )
+
+ggsave("GraphNonComparativeErrors_v2.svg", width=2.5, height=11)
+ggsave("GraphNonComparativeErrors_v2.png", width=5, height=10, bg = "white")
+```
+
+
+```{r Likert Plot}
+data.clean.likert.summarized <- data.clean.likert.factor %>% 
+  group_by(label) %>% 
+  count(likert) %>% 
+  mutate(percent = n/47)
+
+ggplot(data = data.clean.likert.summarized, 
+       aes(x = label, y = percent, fill = reorder(likert, desc(likert)),
+               group = reorder(likert, desc(likert)))) + 
+  geom_col(width = 0.7, position = "fill") +
+  geom_text(aes(label = n),
+            color = ifelse((data.clean.likert.summarized$likert == "1" | data.clean.likert.summarized$likert == "5"),
+                           "white", "black"),
+            position = position_fill(vjust = 0.5), 
+            size = 4) + 
+  scale_y_continuous(expand = expansion(mult = c(0, 0)),
+                   breaks = c(seq(0, 1, by = .2)),
+                   limits = c(0,1),
+                   labels = scales::label_percent(),
+                   name = "% of Responses") + 
+  scale_x_discrete(expand = expansion(mult = c(0, 0)), limits = rev) + 
+  scale_fill_manual(values = rev(brewer.pal(5, "RdYlBu")),
+                    labels = rev(c("Very difficult", "Somewhat difficult",
+                        "Neither easy nor difficult", "Somewhat easy", "Very easy")),
+                    name = "Likert Rating") + 
+  coord_flip() + 
+  theme_minimal() + 
+  guides(color = guide_legend(reverse=T)) +
+  theme(axis.title.y = element_blank(),
+        axis.title.x = element_text(margin = margin(t = 12, r = 0, b = 0, l = 0),
+                                   size = rel(1.2)),
+        axis.text.y = element_text(margin = margin(t = 0, r = 5, b = 0, l = 0),
+                                   size = rel(1.5)),
+        legend.text = element_text(margin = margin(t = 0, r = 5, b = 0, l = 0),
+                                   size = rel(1.2)),
+        axis.text.x = element_text(margin = margin(t = 5, r = 0, b = 0, l = 0),
+                                   size = rel(1.4)),
+        aspect.ratio = 1/2.5,
+        plot.margin = margin(t = 0,
+                             r = 20, 
+                             b = 15,
+                             l = 10),
+        legend.position = "bottom")
+
+ggsave("GraphNonComparativeLikert.svg", width=10, height=5)
+ggsave("GraphNonComparativeLikert.png", width=10, height=5, bg = "white")
+```
